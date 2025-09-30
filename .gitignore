@@ -1,0 +1,6 @@
+*.todo
+odin_sand.dSYM
+odin_sand.dSYM/***
+.vscode
+.vscode/***
+odin_sand
