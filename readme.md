@@ -1,4 +1,4 @@
-<video src="video.mov" width="320" height="240" controls></video>
+<video src="video.mp4" width="600" height="400" controls></video>
 
 Noita-like 2D "particle" "simulation" game.
 
