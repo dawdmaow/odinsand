@@ -1,6 +1,8 @@
-[![Watch the video](https://img.youtube.com/vi/84vCYWuGxcU/0.jpg)](https://www.youtube.com/watch?v=84vCYWuGxcU)
-
 Noita-like 2D "particle" "simulation" game.
+
+## Video
+
+[![Video](https://img.youtube.com/vi/84vCYWuGxcU/0.jpg)](https://www.youtube.com/watch?v=84vCYWuGxcU)
 
 ## Info
 - 14 (or so) particle kinds
