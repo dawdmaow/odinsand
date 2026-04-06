@@ -12,7 +12,8 @@ Noita-like 2D "particle" "simulation" game.
 - scanline shader
 
 ## Dependencies
-- raylib
+- wgpu
+- sdl3
 - odin
 
 ## Particle Interactions

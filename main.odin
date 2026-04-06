@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:c"
 import "core:fmt"
 import "core:log"
@@ -10,7 +11,7 @@ import "core:strings"
 import "core:thread"
 import "core:unicode/utf8"
 import mu "vendor:microui"
-import rl "vendor:raylib"
+import "vendor:wgpu"
 
 GROWABLE :: bit_set[Particle_Kind]{.NONE, .WATER}
 
@@ -74,7 +75,55 @@ SPRINKLE_RADIUS_MAX :: 35
 SPRINKLE_DENSITY_MIN :: 0.01
 SPRINKLE_DENSITY_MAX :: 0.1
 
-particle_kind_keyboard_keys := [Particle_Kind]rl.KeyboardKey {
+KeyboardKey :: enum {
+	KEY_NULL,
+	ONE,
+	TWO,
+	THREE,
+	FOUR,
+	FIVE,
+	SIX,
+	SEVEN,
+	EIGHT,
+	NINE,
+	ZERO,
+	LEFT_SHIFT,
+	RIGHT_SHIFT,
+	LEFT_CONTROL,
+	RIGHT_CONTROL,
+	LEFT_ALT,
+	RIGHT_ALT,
+	BACKSPACE,
+	DELETE,
+	ENTER,
+	KP_ENTER,
+	LEFT,
+	RIGHT,
+	HOME,
+	END,
+	A,
+	X,
+	C,
+	V,
+}
+
+Color :: struct {
+	r, g, b, a: u8,
+}
+
+YELLOW :: Color{214, 181, 86, 255}
+BLUE :: Color{74, 144, 226, 255}
+GRAY :: Color{122, 130, 142, 255}
+ORANGE :: Color{255, 140, 66, 255}
+WHITE :: Color{236, 240, 241, 255}
+GREEN :: Color{80, 220, 130, 255}
+RED :: Color{220, 68, 75, 255}
+BROWN :: Color{125, 90, 68, 255}
+PURPLE :: Color{142, 84, 233, 255}
+BLACK :: Color{20, 24, 31, 255}
+DARKGREEN :: Color{37, 112, 74, 255}
+
+particle_kind_keyboard_keys := [Particle_Kind]KeyboardKey {
 	.SAND       = .ONE,
 	.WATER      = .TWO,
 	.STONE      = .THREE,
@@ -91,21 +140,21 @@ particle_kind_keyboard_keys := [Particle_Kind]rl.KeyboardKey {
 	.ASH        = .KEY_NULL,
 }
 
-colors := [Particle_Kind]rl.Color {
-	.SAND       = rl.YELLOW,
-	.WATER      = rl.BLUE,
-	.SMOKE      = rl.GRAY,
-	.FIRE       = rl.ORANGE,
-	.SALT       = rl.WHITE,
-	.ACID       = rl.GREEN,
-	.LAVA       = rl.RED,
-	.STONE      = rl.GRAY,
-	.OIL        = rl.BROWN,
-	.CORRUPTION = rl.PURPLE,
-	.SEED       = rl.BROWN,
-	.VINE       = rl.DARKGREEN,
-	.NONE       = rl.BLACK,
-	.ASH        = rl.GRAY,
+colors := [Particle_Kind]Color {
+	.SAND       = YELLOW,
+	.WATER      = BLUE,
+	.SMOKE      = GRAY,
+	.FIRE       = ORANGE,
+	.SALT       = WHITE,
+	.ACID       = GREEN,
+	.LAVA       = RED,
+	.STONE      = GRAY,
+	.OIL        = BROWN,
+	.CORRUPTION = PURPLE,
+	.SEED       = BROWN,
+	.VINE       = DARKGREEN,
+	.NONE       = BLACK,
+	.ASH        = GRAY,
 }
 
 Particle_Kind :: enum {
@@ -154,15 +203,67 @@ particle_kind_names := [Particle_Kind]string {
 	.ASH        = "Ash",
 }
 
+when ODIN_OS != .JS {
+	pool: thread.Pool
+}
+
+WGPU_UI_BUFFER_SIZE :: 16384
+PARTICLE_TEXTURE_WIDTH :: WINDOW_WIDTH
+PARTICLE_TEXTURE_HEIGHT :: WINDOW_HEIGHT
+PARTICLE_TEXTURE_BYTES_PER_ROW :: ((PARTICLE_TEXTURE_WIDTH * 4 + 255) / 256) * 256
+PARTICLE_TEXTURE_UPLOAD_SIZE :: PARTICLE_TEXTURE_BYTES_PER_ROW * PARTICLE_TEXTURE_HEIGHT
+
+WGPU_State :: struct {
+	ctx:                        runtime.Context,
+	// Surface lifecycle
+	instance:                   wgpu.Instance,
+	surface:                    wgpu.Surface,
+	adapter:                    wgpu.Adapter,
+	device:                     wgpu.Device,
+	queue:                      wgpu.Queue,
+	config:                     wgpu.SurfaceConfiguration,
+
+	// Particle composition pass
+	particle_module:            wgpu.ShaderModule,
+	particle_pipeline_layout:   wgpu.PipelineLayout,
+	particle_pipeline:          wgpu.RenderPipeline,
+	particle_texture:           wgpu.Texture,
+	particle_texture_view:      wgpu.TextureView,
+	particle_sampler:           wgpu.Sampler,
+	particle_bind_group_layout: wgpu.BindGroupLayout,
+	particle_bind_group:        wgpu.BindGroup,
+	particle_pixels:            [PARTICLE_TEXTURE_WIDTH * PARTICLE_TEXTURE_HEIGHT]Color,
+	particle_upload:            [PARTICLE_TEXTURE_UPLOAD_SIZE]u8,
+
+	// Microui pass
+	ui_module:                  wgpu.ShaderModule,
+	ui_pipeline_layout:         wgpu.PipelineLayout,
+	ui_pipeline:                wgpu.RenderPipeline,
+	ui_const_buffer:            wgpu.Buffer,
+	ui_vertex_buffer:           wgpu.Buffer,
+	ui_texcoord_buffer:         wgpu.Buffer,
+	ui_color_buffer:            wgpu.Buffer,
+	ui_index_buffer:            wgpu.Buffer,
+	ui_sampler:                 wgpu.Sampler,
+	ui_bind_group_layout:       wgpu.BindGroupLayout,
+	ui_bind_group:              wgpu.BindGroup,
+	ui_atlas_texture:           wgpu.Texture,
+	ui_atlas_texture_view:      wgpu.TextureView,
+	ui_tex_buf:                 [WGPU_UI_BUFFER_SIZE * 8]f32,
+	ui_vert_buf:                [WGPU_UI_BUFFER_SIZE * 8]f32,
+	ui_color_buf:               [WGPU_UI_BUFFER_SIZE * 16]u8,
+	ui_index_buf:               [WGPU_UI_BUFFER_SIZE * 6]u32,
+	ui_prev_buf_idx:            u32,
+	ui_buf_idx:                 u32,
+	curr_encoder:               wgpu.CommandEncoder,
+	curr_pass:                  wgpu.RenderPassEncoder,
+	curr_texture:               wgpu.SurfaceTexture,
+	curr_view:                  wgpu.TextureView,
+}
+
 // game state
 state := struct {
-	// low-level
-	pool:                      thread.Pool,
-	// raylib
-	scanlines_shader:          rl.Shader,
-	screen_texture:            rl.RenderTexture2D,
-	mu_atlas_texture:          rl.RenderTexture2D, // used by microui for font rendering. why? not sure.
-	debug_texture:             rl.RenderTexture2D, // for debug shapes etc.
+	wgpu:                      WGPU_State,
 	// game
 	grid:                      [GRID_WIDTH][GRID_HEIGHT]Particle,
 	frame:                     u16,
@@ -171,15 +272,21 @@ state := struct {
 	sprinkle_density:          f32,
 	mouse_pos, prev_mouse_pos: Mouse_Pos,
 	// ui settings
-	scanlines_enabled:         bool,
-	show_thread_boundaries:    bool,
-	show_fps:                  bool,
+	// scanlines_enabled:         bool,
+	// show_thread_boundaries:    bool,
+	// show_fps:                  bool,
 	// microui
 	mu_ctx:                    mu.Context,
 	log_buf:                   [1 << 16]byte, // TODO: remove all logging and bg
 	log_buf_len:               int,
 	log_buf_updated:           bool,
 	bg:                        mu.Color,
+	// inputs
+	keyboard_keys_pressed:     bit_set[KeyboardKey],
+	mouse_buttons_pressed:     bit_set[MouseButton],
+	mouse_wheel:               f32,
+	os:                        OS,
+	cursor:                    [2]i32,
 } {
 	selected_particle_kind = .SAND,
 	sprinkle_radius        = (SPRINKLE_RADIUS_MIN + SPRINKLE_RADIUS_MAX) / 2,
@@ -505,13 +612,19 @@ neighbouring_offsets := [8]Grid_Pos {
 	{-1, 0},
 }
 
-mouse_buttons_map := [mu.Mouse]rl.MouseButton {
+MouseButton :: enum {
+	LEFT,
+	RIGHT,
+	MIDDLE,
+}
+
+mouse_buttons_map := [mu.Mouse]MouseButton {
 	.LEFT   = .LEFT,
 	.RIGHT  = .RIGHT,
 	.MIDDLE = .MIDDLE,
 }
 
-key_map := [mu.Key][2]rl.KeyboardKey {
+key_map := [mu.Key][2]KeyboardKey {
 	.SHIFT     = {.LEFT_SHIFT, .RIGHT_SHIFT},
 	.CTRL      = {.LEFT_CONTROL, .RIGHT_CONTROL},
 	.ALT       = {.LEFT_ALT, .RIGHT_ALT},
@@ -1243,68 +1356,67 @@ update_particle :: proc(pos: Grid_Pos) {
 THREAD_COUNT :: 4
 #assert(THREAD_COUNT % 2 == 0) // makes it easier to spread threads evenly
 
-// TODO: thrading doens't impact performance much, why?
-update_particles_threaded :: proc() {
-	// we're only processing HALF of the zones (in separate threads) at a time, this is why we need to multiply by 2
-	VERTICAL_ZONES :: THREAD_COUNT * 2
+when ODIN_OS != .JS {
+	update_particles_threaded :: proc() {
+		// we're only processing HALF of the zones (in separate threads) at a time, this is why we need to multiply by 2
+		VERTICAL_ZONES :: THREAD_COUNT * 2
 
-	thread_x_step := i32(GRID_WIDTH / VERTICAL_ZONES)
-	assert(thread_x_step >= MIN_THREAD_X_STEP)
+		thread_x_step := i32(GRID_WIDTH / VERTICAL_ZONES)
+		assert(thread_x_step >= MIN_THREAD_X_STEP)
 
-	thread_xs: [VERTICAL_ZONES][2]i32
-	for i in i32(0) ..< VERTICAL_ZONES {
-		start := thread_x_step * i
-		// make sure the last thread covers all remaining columns
-		end := GRID_WIDTH if i == VERTICAL_ZONES - 1 else thread_x_step * (i + 1)
-		thread_xs[i] = [2]i32{start, end}
-		if state.show_thread_boundaries {
-			rl.DrawLine(end * CELL_WIDTH, 0, end * CELL_WIDTH, WINDOW_HEIGHT, rl.RED)
+		thread_xs: [VERTICAL_ZONES][2]i32
+		for i in i32(0) ..< VERTICAL_ZONES {
+			start := thread_x_step * i
+			// make sure the last thread covers all remaining columns
+			end := GRID_WIDTH if i == VERTICAL_ZONES - 1 else thread_x_step * (i + 1)
+			thread_xs[i] = [2]i32{start, end}
+			// if state.show_thread_boundaries {
+			// 	// FIXME:
+			// 	// Draw thread boundary guides in a debug WGPU overlay pass.
+			// }
 		}
-	}
 
-	task :: proc(task: thread.Task) {
-		x_range := (^[2]i32)(task.data)
-		assert(x_range.x >= 0)
-		assert(x_range.y <= GRID_WIDTH)
-		for x in x_range.x ..< x_range.y {
-			for y in i32(0) ..< GRID_HEIGHT {
-				update_particle({x, y})
+		task :: proc(task: thread.Task) {
+			x_range := (^[2]i32)(task.data)
+			assert(x_range.x >= 0)
+			assert(x_range.y <= GRID_WIDTH)
+			for x in x_range.x ..< x_range.y {
+				for y in i32(0) ..< GRID_HEIGHT {
+					update_particle({x, y})
+				}
 			}
 		}
-	}
 
-	// each column should be as distances from others as possible, so particle moving between each thread borders don't get processed at the same time
-	// this is why we process even first, then wait, then process odd, then wait again
-	for i := i32(0); i < VERTICAL_ZONES; i += 2 {
-		thread.pool_add_task(&state.pool, context.allocator, task, rawptr(&thread_xs[i]))
-	}
-	thread.pool_finish(&state.pool)
+		// each column should be as distances from others as possible, so particle moving between each thread borders don't get processed at the same time
+		// this is why we process even first, then wait, then process odd, then wait again
+		for i := i32(0); i < VERTICAL_ZONES; i += 2 {
+			thread.pool_add_task(&pool, context.allocator, task, rawptr(&thread_xs[i]))
+		}
+		thread.pool_finish(&pool)
 
-	for i := i32(1); i < VERTICAL_ZONES; i += 2 {
-		thread.pool_add_task(&state.pool, context.allocator, task, rawptr(&thread_xs[i]))
+		for i := i32(1); i < VERTICAL_ZONES; i += 2 {
+			thread.pool_add_task(&pool, context.allocator, task, rawptr(&thread_xs[i]))
+		}
+		thread.pool_finish(&pool)
 	}
-	thread.pool_finish(&state.pool)
 }
 
-broadcast_rl_inputs_to_mu :: proc() {
+broadcast_inputs_to_mu :: proc() {
 	// mouse buttons
-	for button_rl, button_mu in mouse_buttons_map {
-		switch {
-		case rl.IsMouseButtonPressed(button_rl):
+	for button, button_mu in mouse_buttons_map {
+		if button in state.mouse_buttons_pressed {
 			mu.input_mouse_down(&state.mu_ctx, state.mouse_pos.x, state.mouse_pos.y, button_mu)
-		case rl.IsMouseButtonReleased(button_rl):
+		} else {
 			mu.input_mouse_up(&state.mu_ctx, state.mouse_pos.x, state.mouse_pos.y, button_mu)
 		}
 	}
 
 	// keyboard keys
-	for keys_rl, key_mu in key_map {
-		for key_rl in keys_rl {
-			switch {
-			case key_rl == .KEY_NULL: // ignore
-			case rl.IsKeyPressed(key_rl), rl.IsKeyPressedRepeat(key_rl):
+	for keys, key_mu in key_map {
+		for key in keys {
+			if key in state.keyboard_keys_pressed {
 				mu.input_key_down(&state.mu_ctx, key_mu)
-			case rl.IsKeyReleased(key_rl):
+			} else {
 				mu.input_key_up(&state.mu_ctx, key_mu)
 			}
 		}
@@ -1315,417 +1427,217 @@ Grid_Pos :: distinct [2]i32
 Mouse_Pos :: distinct [2]i32
 
 mouse_pos_to_grid_pos :: #force_inline proc(pos: Mouse_Pos) -> Grid_Pos {
-	return Grid_Pos{pos.x / CELL_WIDTH, (GRID_HEIGHT - 1) - (pos.y / CELL_HEIGHT)}
+	window_w, window_h := os_get_window_size()
+	if window_w == 0 || window_h == 0 {
+		return Grid_Pos{0, 0}
+	}
+
+	// SDL mouse events are reported in window coordinates, not framebuffer pixels.
+	// Using window size here keeps cursor->grid mapping correct on high-DPI displays.
+	virtual_x := i32(f32(pos.x) * f32(WINDOW_WIDTH) / f32(window_w))
+	virtual_y := i32(f32(pos.y) * f32(WINDOW_HEIGHT) / f32(window_h))
+	virtual_x = clamp(virtual_x, 0, WINDOW_WIDTH - 1)
+	virtual_y = clamp(virtual_y, 0, WINDOW_HEIGHT - 1)
+
+	return Grid_Pos{virtual_x / CELL_WIDTH, (GRID_HEIGHT - 1) - (virtual_y / CELL_HEIGHT)}
+}
+
+resize :: proc() {
+	r := &state.wgpu
+	if r.device == nil || r.surface == nil {
+		return
+	}
+	r.config.width, r.config.height = os_get_framebuffer_size()
+	wgpu.SurfaceConfigure(r.surface, &r.config)
+	if r.ui_const_buffer != nil {
+		wgpu_write_ui_consts()
+	}
+}
+
+frame :: proc(dt: f32) {
+	state.frame += 1
+	free_all(context.temp_allocator)
+
+	state.prev_mouse_pos = state.mouse_pos
+	mu.input_mouse_move(&state.mu_ctx, state.mouse_pos.x, state.mouse_pos.y)
+	mu.input_scroll(&state.mu_ctx, 0, -i32(state.mouse_wheel * 30))
+
+	// particle kinds keyboard shortcuts
+	for key, particle_kind in particle_kind_keyboard_keys {
+		if key in state.keyboard_keys_pressed {
+			state.selected_particle_kind = particle_kind
+			break
+		}
+	}
+
+	broadcast_inputs_to_mu()
+
+	mu.begin(&state.mu_ctx)
+	update_mu(&state.mu_ctx)
+	mu.end(&state.mu_ctx)
+
+	if !mu_capturing_user_input() {
+		// sprinkle radius
+		if state.mouse_wheel > 0 {
+			state.sprinkle_radius += 1
+		} else if state.mouse_wheel < 0 {
+			state.sprinkle_radius -= 1
+		}
+		state.sprinkle_radius = clamp(
+			state.sprinkle_radius,
+			SPRINKLE_RADIUS_MIN,
+			SPRINKLE_RADIUS_MAX,
+		)
+
+		if .LEFT in state.mouse_buttons_pressed &&
+		   valid_pos(mouse_pos_to_grid_pos(state.mouse_pos)) {
+			// TODO: in order for this to look good particles would have to keep their float positions as a field (integer-only position makes upward/sideways physics look really bad)
+			// mouse_delta := state.mouse_pos - state.prev_mouse_pos
+			// mouse_delta.y = -mouse_delta.y
+			// factor :: 0.05
+			add_particles_in_radius(
+				mouse_pos_to_grid_pos(state.mouse_pos),
+				state.selected_particle_kind,
+				state.sprinkle_radius,
+				state.sprinkle_density if state.selected_particle_kind != .STONE else 1,
+				// Velocity{f32(mouse_delta.x) * factor, f32(mouse_delta.y) * factor},
+				{0, 0},
+			)
+		} else if .RIGHT in state.mouse_buttons_pressed &&
+		   valid_pos(mouse_pos_to_grid_pos(state.mouse_pos)) {
+			erase_particles_in_radius(mouse_pos_to_grid_pos(state.mouse_pos))
+		}
+	}
+
+	when ODIN_OS != .JS {
+		update_particles_threaded()
+	} else {
+		for x in i32(0) ..< GRID_WIDTH {
+			for y in i32(0) ..< GRID_HEIGHT {
+				update_particle({x, y})
+			}
+		}
+	}
+
+	render_game_to_texture()
+	wgpu_begin_frame()
+	wgpu_draw_particles_to_pass()
+	render_mu_to_screen()
+	wgpu_present_frame()
+	state.mouse_wheel = 0
+}
+
+finish :: proc() {
+	wgpu_finish()
+	when ODIN_OS != .JS {
+		thread.pool_finish(&pool)
+	}
 }
 
 main :: proc() {
 	logger := log.create_console_logger()
 	context.logger = logger
+	state.wgpu.ctx = context
 
-	thread.pool_init(&state.pool, context.allocator, THREAD_COUNT)
-	defer thread.pool_finish(&state.pool)
+	os_init()
 
-	// consider intergrating raylib's logger using `rl.SetTraceLogCallback()`
-	rl.SetTraceLogLevel(.WARNING)
-
-	// init raylib
-	rl.InitWindow(800, 600, "Sand")
-	defer rl.CloseWindow()
-
-	rl.SetTargetFPS(60)
-
-	state.screen_texture = rl.LoadRenderTexture(WINDOW_WIDTH, WINDOW_HEIGHT)
-	defer rl.UnloadRenderTexture(state.screen_texture)
-
-	state.debug_texture = rl.LoadRenderTexture(WINDOW_WIDTH, WINDOW_HEIGHT)
-	defer rl.UnloadRenderTexture(state.debug_texture)
-
-	state.scanlines_shader = rl.LoadShader(nil, "shaders/scanlines.fs")
-	defer rl.UnloadShader(state.scanlines_shader)
-	ensure(rl.IsShaderValid(state.scanlines_shader))
-	ensure(rl.IsShaderReady(state.scanlines_shader))
-	// end init raylib
+	when ODIN_OS != .JS {
+		thread.pool_init(&pool, context.allocator, THREAD_COUNT)
+	}
 
 	// init microui
 	mu.init(&state.mu_ctx)
 	state.mu_ctx.text_width = mu.default_atlas_text_width
 	state.mu_ctx.text_height = mu.default_atlas_text_height
-
-	state.mu_atlas_texture = rl.LoadRenderTexture(
-		c.int(mu.DEFAULT_ATLAS_WIDTH),
-		c.int(mu.DEFAULT_ATLAS_HEIGHT),
-	)
-	defer rl.UnloadRenderTexture(state.mu_atlas_texture)
-
-	image := rl.GenImageColor(
-		c.int(mu.DEFAULT_ATLAS_WIDTH),
-		c.int(mu.DEFAULT_ATLAS_HEIGHT),
-		rl.Color{0, 0, 0, 0},
-	)
-	defer rl.UnloadImage(image)
-
-	for alpha, i in mu.default_atlas_alpha {
-		x := i % mu.DEFAULT_ATLAS_WIDTH
-		y := i / mu.DEFAULT_ATLAS_WIDTH
-		color := rl.Color{255, 255, 255, alpha}
-		rl.ImageDrawPixel(&image, c.int(x), c.int(y), color)
-	}
-
-	rl.BeginTextureMode(state.mu_atlas_texture)
-	rl.UpdateTexture(state.mu_atlas_texture.texture, rl.LoadImageColors(image))
-	rl.EndTextureMode()
-	// end init microui
-
-	// main loop
-	for !rl.WindowShouldClose() {
-		state.frame += 1
-		free_all(context.temp_allocator)
-
-		rl.BeginTextureMode(state.debug_texture)
-		rl.ClearBackground(rl.Color{0, 0, 0, 0})
-
-		state.prev_mouse_pos = state.mouse_pos
-		state.mouse_pos = Mouse_Pos{rl.GetMouseX(), rl.GetMouseY()}
-
-		// mouse position is {0,0} if the cursor didnt't move at all since raylib window was created. not a bug.
-		mu.input_mouse_move(&state.mu_ctx, state.mouse_pos.x, state.mouse_pos.y)
-
-		mu.input_scroll(&state.mu_ctx, 0, i32(rl.GetMouseWheelMove()) * -30) // TODO: float->int might cause problems if move < 1
-
-		// particle kinds keyboard shortcuts
-		for key, particle_kind in particle_kind_keyboard_keys {
-			if rl.IsKeyPressed(key) {
-				state.selected_particle_kind = particle_kind
-				break
-			}
-		}
-
-		broadcast_rl_inputs_to_mu()
-
-		mu.begin(&state.mu_ctx)
-		update_mu(&state.mu_ctx)
-		mu.end(&state.mu_ctx)
-
-		if !mu_capturing_user_input() {
-			// sprinkle radius
-			if rl.GetMouseWheelMove() > 0 {
-				state.sprinkle_radius += 1
-			} else if rl.GetMouseWheelMove() < 0 {
-				state.sprinkle_radius -= 1
-			}
-			state.sprinkle_radius = clamp(
-				state.sprinkle_radius,
-				SPRINKLE_RADIUS_MIN,
-				SPRINKLE_RADIUS_MAX,
-			)
-
-			if rl.IsMouseButtonDown(.LEFT) && valid_pos(mouse_pos_to_grid_pos(state.mouse_pos)) {
-				// TODO: in order for this to look good particles would have to keep their float positions as a field (integer-only position makes upward/sideways physics look really bad)
-				// mouse_delta := state.mouse_pos - state.prev_mouse_pos
-				// mouse_delta.y = -mouse_delta.y
-				// factor :: 0.05
-				add_particles_in_radius(
-					mouse_pos_to_grid_pos(state.mouse_pos),
-					state.selected_particle_kind,
-					state.sprinkle_radius,
-					state.sprinkle_density if state.selected_particle_kind != .STONE else 1,
-					// Velocity{f32(mouse_delta.x) * factor, f32(mouse_delta.y) * factor},
-					{0, 0},
-				)
-			} else if rl.IsMouseButtonDown(.RIGHT) &&
-			   valid_pos(mouse_pos_to_grid_pos(state.mouse_pos)) {
-				erase_particles_in_radius(mouse_pos_to_grid_pos(state.mouse_pos))
-			}
-		}
-
-		update_particles_threaded()
-
-		rl.EndTextureMode() // end debug texture
-
-		render_game_to_texture()
-
-		// render state texture with custom shaders
-		rl.BeginDrawing()
-		rl.ClearBackground(rl.BLACK)
-		window_width: f32
-		window_height: f32
-		if state.scanlines_enabled {
-			window_width = WINDOW_WIDTH
-			window_height = WINDOW_HEIGHT
-			rl.SetShaderValue(
-				state.scanlines_shader,
-				rl.GetShaderLocation(state.scanlines_shader, "renderWidth"),
-				rawptr(&window_width),
-				.FLOAT,
-			)
-			rl.SetShaderValue(
-				state.scanlines_shader,
-				rl.GetShaderLocation(state.scanlines_shader, "renderHeight"),
-				rawptr(&window_height),
-				.FLOAT,
-			)
-			rl.BeginShaderMode(state.scanlines_shader)
-		}
-		rl.DrawTextureRec(
-			texture = state.screen_texture.texture,
-			source = {0, 0, f32(WINDOW_WIDTH), -f32(WINDOW_HEIGHT)},
-			position = {0, 0},
-			tint = rl.WHITE,
-		)
-		rl.EndShaderMode()
-
-		rl.DrawTextureRec(
-			texture = state.debug_texture.texture,
-			source = {0, 0, f32(WINDOW_WIDTH), -f32(WINDOW_HEIGHT)},
-			position = {0, 0},
-			tint = rl.WHITE,
-		)
-
-		render_mu_to_screen()
-
-		rl.EndDrawing()
-	}
-}
-
-render_particles_activity :: proc() {
-	for x in i32(0) ..< GRID_WIDTH {
-		for y in i32(0) ..< GRID_HEIGHT {
-			particle := &state.grid[x][y]
-			render_x := x * CELL_WIDTH
-			render_y := (GRID_HEIGHT - 1 - y) * CELL_HEIGHT
-
-			updated := particle.updated_frame == state.frame
-
-			color := rl.GREEN if updated else rl.RED
-			color.a = 100
-
-			rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-		}
-	}
-}
-
-render_particles :: proc() {
-	for x in i32(0) ..< GRID_WIDTH {
-		for y in i32(0) ..< GRID_HEIGHT {
-			render_x := x * CELL_WIDTH
-			render_y := (GRID_HEIGHT - 1 - y) * CELL_HEIGHT
-
-			particle := &state.grid[x][y]
-
-			switch particle.kind {
-
-			case .ASH:
-				color := rl.ColorAlphaBlend(rl.BLACK, rl.GRAY, particle.brightness)
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .SAND:
-				color := rl.ColorAlphaBlend(rl.BLACK, rl.YELLOW, particle.brightness)
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .SALT:
-				color := rl.ColorAlphaBlend(rl.BLACK, rl.WHITE, particle.brightness)
-
-				t := f32(particle.lifetime) / SALT_LIFETIME
-				alpha := u8(math.lerp(f32(0), f32(255), t))
-
-				color.a = alpha
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .ACID:
-				brightness := rand.choice([]u8{220, 230, 240, 250})
-
-				color := rl.Color{0, 255, 255 / 3, 255}
-				color = rl.ColorAlphaBlend(rl.BLACK, color, brightness)
-
-				alpha := u8(math.lerp(f32(150), f32(255), f32(particle.lifetime) / ACID_LIFETIME))
-				color.a = alpha
-
-				if (rand.float32() < 0.001) {
-					color = rl.ColorAlphaBlend(rl.WHITE, color, 230)
-				}
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .WATER:
-				brightness := rand.choice([]u8{220, 230, 240, 250})
-
-				color := rl.Color{0, brightness / 3, brightness, 255}
-
-				if (rand.float32() < 0.001) {
-					color = rl.ColorAlphaBlend(rl.WHITE, color, 230)
-				}
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .SMOKE:
-				t := f32(particle.lifetime) / SMOKE_LIFETIME
-				alpha := u8(math.lerp(f32(0), f32(255), t))
-
-				brightness1 := rand.choice([]u8{220, 230, 240, 250})
-				brightness2 := u8(math.lerp(f32(0), f32(255), t))
-				brightness := u8((f32(brightness1) + f32(brightness2)) / 2)
-
-				color := rl.ColorAlphaBlend(rl.BLACK, rl.WHITE, brightness)
-				color.a = alpha
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .FIRE:
-				color := rand.choice([]rl.Color{rl.ORANGE, rl.RED, rl.YELLOW})
-				color.a -= u8(random_i32(0, 200))
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .LAVA:
-				base_color: rl.Color
-
-				color_determinant := i32(particle.brightness)
-				color_determinant += random_i32(-25, 25)
-
-				if color_determinant < i32(255 / 3) {
-					base_color = rl.RED
-				} else if color_determinant < i32(255 * 2 / 3) {
-					base_color = rl.ORANGE
-				} else {
-					base_color = rl.YELLOW
-				}
-
-				noise := u8(random_i32(225, 250))
-
-				color := rl.ColorAlphaBlend(rl.BLACK, base_color, noise)
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .STONE:
-				t := f32(particle.brightness) / 255
-				brightness := u8(math.lerp(f32(20), f32(50), t))
-
-				color := rl.Color{brightness, brightness, brightness, 255}
-				color.g = u8(min(int(color.g), int(particle.brightness - 5)))
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .OIL:
-				// brightness := particle.brightness
-				// if rand.float32() < 0.02 {
-				// 	brightness -= u8(random_i32(0, 30))
-				// }
-
-				// color := rl.BROWN
-				// color = rl.ColorAlphaBlend(rl.BLACK, color, brightness)
-
-				// rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-				color := rl.BROWN
-				noise := rand.int31_max(50)
-				color.a = 255 - u8(noise)
-
-				if (rand.float32() < 0.01) {
-					color = rl.ColorAlphaBlend(rl.WHITE, color, 230)
-				}
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .CORRUPTION:
-				base_brightness := int(state.grid[x][y].brightness)
-
-				noise := i32(rand.int31_max(100))
-				color_i32 := [3]i32 {
-					i32(base_brightness) + noise,
-					i32(f32(base_brightness) * 0.6) + noise / 2,
-					i32(base_brightness) + rand.int31_max(80),
-				}
-
-				color_i32.r = clamp(color_i32.r, 50, 255)
-				color_i32.g = clamp(color_i32.g, 20, 200)
-				color_i32.b = clamp(color_i32.b, 30, 255)
-
-				// pulse
-				if rand.float32() < 0.5 {
-					OFFSET :: 150
-
-					color_i32.r += random_i32(-OFFSET, OFFSET)
-					color_i32.g += random_i32(-OFFSET, OFFSET)
-					color_i32.b += random_i32(-OFFSET, OFFSET)
-
-					color_i32.r = clamp(color_i32.r, 0, 255)
-					color_i32.g = clamp(color_i32.g, 0, 255)
-					color_i32.b = clamp(color_i32.b, 0, 255)
-				}
-
-				t := f32(particle.lifetime) / 255
-				alpha := u8(math.lerp(f32(100), f32(255), t))
-
-				color := rl.Color{u8(color_i32.r), u8(color_i32.g), u8(color_i32.b), alpha}
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .SEED:
-				brightness := particle.brightness
-
-				color := rl.BROWN
-				color = rl.ColorAlphaBlend(rl.BLACK, color, brightness)
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .VINE:
-				base_brightness := int(particle.brightness)
-
-				r_brightness := i32(base_brightness) / 4
-				g_brightness := i32(base_brightness)
-				b_brightness := i32(base_brightness) / 3
-
-				r_brightness = clamp(r_brightness, 10, 80)
-				g_brightness = clamp(g_brightness, 50, 200)
-				b_brightness = clamp(b_brightness, 10, 80)
-
-				color := rl.Color{u8(r_brightness), u8(g_brightness), u8(b_brightness), 255}
-
-				if particle.lifetime < 50 {
-					t := f32(particle.lifetime) / 50
-					alpha := u8(math.lerp(f32(180), f32(255), t))
-					color.a = alpha
-				}
-
-				rl.DrawRectangle(render_x, render_y, CELL_WIDTH, CELL_HEIGHT, color)
-
-			case .NONE:
-			}
-		}
-	}
+	wgpu_init()
 }
 
 render_game_to_texture :: proc() {
-	rl.BeginTextureMode(state.screen_texture)
-	defer rl.EndTextureMode()
-
-	rl.ClearBackground(rl.BLACK)
-
-	if state.show_fps {
-		rl.DrawFPS(WINDOW_WIDTH - 100, 10)
+	r := &state.wgpu
+	for i in 0 ..< len(r.particle_pixels) {
+		r.particle_pixels[i] = BLACK
 	}
 
-	mouse_x := rl.GetMouseX()
-	mouse_y := rl.GetMouseY()
-
-	render_particles()
-	// render_particles_activity()
+	for x in i32(0) ..< GRID_WIDTH {
+		for y in i32(0) ..< GRID_HEIGHT {
+			particle := &state.grid[x][y]
+			color := particle_color(particle)
+			if color.a == 0 {
+				continue
+			}
+			render_x := x * CELL_WIDTH
+			render_y := (GRID_HEIGHT - 1 - y) * CELL_HEIGHT
+			for py in render_y ..< min(render_y + CELL_HEIGHT, WINDOW_HEIGHT) {
+				row := py * WINDOW_WIDTH
+				for px in render_x ..< min(render_x + CELL_WIDTH, WINDOW_WIDTH) {
+					r.particle_pixels[row + px] = color
+				}
+			}
+		}
+	}
 
 	if !mu_capturing_user_input() {
-		// render sprinkle radius
-		color := colors[state.selected_particle_kind]
-		rl.DrawCircleLines(mouse_x, mouse_y, f32(state.sprinkle_radius * CELL_HEIGHT), color)
+		center := mouse_pos_to_grid_pos(state.mouse_pos)
+		if valid_pos(center) {
+			// Keep brush feedback visible against both dark background and bright particles.
+			preview_tint := color_brightness(colors[state.selected_particle_kind], 1.2)
+			if state.selected_particle_kind == .NONE {
+				preview_tint = WHITE
+			}
+			fill_alpha := u8(35)
+			outline_alpha := u8(140)
+
+			for dx in -state.sprinkle_radius ..= state.sprinkle_radius {
+				for dy in -state.sprinkle_radius ..= state.sprinkle_radius {
+					if !is_within_radius({dx, dy}, state.sprinkle_radius) do continue
+					brush_pos := center + {dx, dy}
+					if !valid_pos(brush_pos) do continue
+
+					is_outline := !is_within_radius({dx, dy}, state.sprinkle_radius - 1)
+					alpha := fill_alpha if !is_outline else outline_alpha
+
+					render_x := brush_pos.x * CELL_WIDTH
+					render_y := (GRID_HEIGHT - 1 - brush_pos.y) * CELL_HEIGHT
+					for py in render_y ..< min(render_y + CELL_HEIGHT, WINDOW_HEIGHT) {
+						row := py * WINDOW_WIDTH
+						for px in render_x ..< min(render_x + CELL_WIDTH, WINDOW_WIDTH) {
+							idx := row + px
+							r.particle_pixels[idx] = color_alpha_blend(
+								r.particle_pixels[idx],
+								preview_tint,
+								alpha,
+							)
+						}
+					}
+				}
+			}
+		}
 	}
 
+	for y in 0 ..< PARTICLE_TEXTURE_HEIGHT {
+		src_row := y * PARTICLE_TEXTURE_WIDTH
+		dst_row := y * PARTICLE_TEXTURE_BYTES_PER_ROW
+		for x in 0 ..< PARTICLE_TEXTURE_WIDTH {
+			color := r.particle_pixels[src_row + x]
+			out := dst_row + x * 4
+			r.particle_upload[out + 0] = color.r
+			r.particle_upload[out + 1] = color.g
+			r.particle_upload[out + 2] = color.b
+			r.particle_upload[out + 3] = color.a
+		}
+	}
 
+	wgpu.QueueWriteTexture(
+		r.queue,
+		&{texture = r.particle_texture},
+		&r.particle_upload[0],
+		size_of(r.particle_upload),
+		&{bytesPerRow = PARTICLE_TEXTURE_BYTES_PER_ROW, rowsPerImage = PARTICLE_TEXTURE_HEIGHT},
+		&{PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT, 1},
+	)
 }
 
-to_rl_color :: proc "contextless" (in_color: mu.Color) -> (out_color: rl.Color) {
-	return {in_color.r, in_color.g, in_color.b, in_color.a}
-}
-
-to_mu_color :: proc "contextless" (in_color: rl.Color) -> (out_color: mu.Color) {
+to_mu_color :: proc "contextless" (in_color: Color) -> (out_color: mu.Color) {
 	return {in_color.r, in_color.g, in_color.b, in_color.a}
 }
 
@@ -1733,13 +1645,13 @@ button :: proc(particle_kind: Particle_Kind) {
 	prev_colors := state.mu_ctx.style.colors
 	defer state.mu_ctx.style.colors = prev_colors
 
-	state.mu_ctx.style.colors[.TEXT] = to_mu_color(rl.BLACK)
+	state.mu_ctx.style.colors[.TEXT] = to_mu_color(BLACK)
 	state.mu_ctx.style.colors[.BUTTON] = to_mu_color(colors[particle_kind])
 	state.mu_ctx.style.colors[.BUTTON_FOCUS] = to_mu_color(
-		rl.ColorBrightness(colors[particle_kind], 2),
+		color_brightness(colors[particle_kind], 2),
 	)
 	state.mu_ctx.style.colors[.BUTTON_HOVER] = to_mu_color(
-		rl.ColorBrightness(colors[particle_kind], 0.5),
+		color_brightness(colors[particle_kind], 0.5),
 	)
 	if .SUBMIT in mu.button(&state.mu_ctx, particle_kind_names[particle_kind]) {
 		state.selected_particle_kind = particle_kind
@@ -1778,9 +1690,9 @@ update_mu :: proc(ctx: ^mu.Context) {
 		mu.label(ctx, "Density:")
 		slider(ctx, &state.sprinkle_density, SPRINKLE_DENSITY_MIN, SPRINKLE_DENSITY_MAX, "%.2f")
 		mu.layout_row(ctx, {0, 150, 0}, 0)
-		mu.checkbox(ctx, "Scanlines", &state.scanlines_enabled)
-		mu.checkbox(ctx, "Thread boundaries", &state.show_thread_boundaries)
-		mu.checkbox(ctx, "Show FPS", &state.show_fps)
+		// mu.checkbox(ctx, "Scanlines", &state.scanlines_enabled)
+		// mu.checkbox(ctx, "Thread boundaries", &state.show_thread_boundaries)
+		// mu.checkbox(ctx, "Show FPS", &state.show_fps)
 	}
 }
 
@@ -1798,71 +1710,804 @@ reset_log :: proc() {
 	state.log_buf_len = 0
 }
 
-render_texture :: proc "contextless" (
-	renderer: rl.RenderTexture2D,
-	dst: ^rl.Rectangle,
-	src: mu.Rect,
-	color: rl.Color,
-) {
-	dst.width = f32(src.w)
-	dst.height = f32(src.h)
-
-	rl.DrawTextureRec(
-		texture = state.mu_atlas_texture.texture,
-		source = {f32(src.x), f32(src.y), f32(src.w), f32(src.h)},
-		position = {dst.x, dst.y},
-		tint = color,
-	)
-}
-
-render_mu_to_screen :: proc "contextless" () {
-	height := rl.GetScreenHeight()
-
-	// rl.BeginTextureMode(state.screen_texture)
-	// defer rl.EndTextureMode()
-	rl.EndScissorMode()
-
+render_mu_to_screen :: proc() {
 	command_backing: ^mu.Command
 	for variant in mu.next_command_iterator(&state.mu_ctx, &command_backing) {
 		switch cmd in variant {
 		case ^mu.Command_Text:
-			dst := rl.Rectangle{f32(cmd.pos.x), f32(cmd.pos.y), 0, 0}
-			for ch in cmd.str {
-				if ch & 0xc0 != 0x80 {
-					r := min(int(ch), 127)
-					src := mu.default_atlas[mu.DEFAULT_ATLAS_FONT + r]
-					render_texture(state.screen_texture, &dst, src, to_rl_color(cmd.color))
-					dst.x += dst.width
-				}
-			}
+			ui_draw_text(cmd.str, cmd.pos, cmd.color)
 		case ^mu.Command_Rect:
-			rl.DrawRectangle(
-				cmd.rect.x,
-				cmd.rect.y,
-				cmd.rect.w,
-				cmd.rect.h,
-				to_rl_color(cmd.color),
-			)
+			ui_draw_rect(cmd.rect, cmd.color)
 		case ^mu.Command_Icon:
-			src := mu.default_atlas[cmd.id]
-			x := cmd.rect.x + (cmd.rect.w - src.w) / 2
-			y := cmd.rect.y + (cmd.rect.h - src.h) / 2
-			render_texture(
-				state.screen_texture,
-				&rl.Rectangle{f32(x), f32(y), 0, 0},
-				src,
-				to_rl_color(cmd.color),
-			)
+			ui_draw_icon(cmd.id, cmd.rect, cmd.color)
 		case ^mu.Command_Clip:
-			rl.BeginScissorMode(
-				cmd.rect.x,
-				height - (cmd.rect.y + cmd.rect.h),
-				cmd.rect.w,
-				cmd.rect.h,
-			)
+			ui_set_clip_rect(cmd.rect)
 		case ^mu.Command_Jump:
 			unreachable()
 		}
 	}
-	// rl.EndTextureMode()
+}
+
+color_alpha_blend :: proc(base, tint: Color, alpha: u8) -> Color {
+	inv := i32(255 - alpha)
+	return Color {
+		r = u8((i32(base.r) * inv + i32(tint.r) * i32(alpha)) / 255),
+		g = u8((i32(base.g) * inv + i32(tint.g) * i32(alpha)) / 255),
+		b = u8((i32(base.b) * inv + i32(tint.b) * i32(alpha)) / 255),
+		a = tint.a,
+	}
+}
+
+color_brightness :: proc(in_color: Color, factor: f32) -> Color {
+	out := in_color
+	out.r = u8(clamp(i32(f32(in_color.r) * factor), 0, 255))
+	out.g = u8(clamp(i32(f32(in_color.g) * factor), 0, 255))
+	out.b = u8(clamp(i32(f32(in_color.b) * factor), 0, 255))
+	return out
+}
+
+particle_color :: proc(particle: ^Particle) -> Color {
+	switch particle.kind {
+	case .ASH:
+		return color_alpha_blend(BLACK, GRAY, particle.brightness)
+	case .SAND:
+		return color_alpha_blend(BLACK, YELLOW, particle.brightness)
+	case .SALT:
+		color := color_alpha_blend(BLACK, WHITE, particle.brightness)
+		t := f32(particle.lifetime) / SALT_LIFETIME
+		color.a = u8(math.lerp(f32(0), f32(255), t))
+		return color
+	case .ACID:
+		brightness := rand.choice([]u8{220, 230, 240, 250})
+		color := color_alpha_blend(BLACK, Color{0, 255, 85, 255}, brightness)
+		color.a = u8(math.lerp(f32(150), f32(255), f32(particle.lifetime) / ACID_LIFETIME))
+		if rand.float32() < 0.001 {
+			color = color_alpha_blend(WHITE, color, 230)
+		}
+		return color
+	case .WATER:
+		brightness := rand.choice([]u8{220, 230, 240, 250})
+		color := Color{0, brightness / 3, brightness, 255}
+		if rand.float32() < 0.001 {
+			color = color_alpha_blend(WHITE, color, 230)
+		}
+		return color
+	case .SMOKE:
+		t := f32(particle.lifetime) / SMOKE_LIFETIME
+		brightness1 := rand.choice([]u8{220, 230, 240, 250})
+		brightness2 := u8(math.lerp(f32(0), f32(255), t))
+		brightness := u8((f32(brightness1) + f32(brightness2)) / 2)
+		color := color_alpha_blend(BLACK, WHITE, brightness)
+		color.a = u8(math.lerp(f32(0), f32(255), t))
+		return color
+	case .FIRE:
+		color := rand.choice([]Color{ORANGE, RED, YELLOW})
+		color.a -= u8(random_i32(0, 200))
+		return color
+	case .LAVA:
+		base_color := RED
+		color_determinant := i32(particle.brightness) + random_i32(-25, 25)
+		if color_determinant >= i32(255 / 3) && color_determinant < i32(255 * 2 / 3) {
+			base_color = ORANGE
+		} else if color_determinant >= i32(255 * 2 / 3) {
+			base_color = YELLOW
+		}
+		return color_alpha_blend(BLACK, base_color, u8(random_i32(225, 250)))
+	case .STONE:
+		t := f32(particle.brightness) / 255
+		brightness := u8(math.lerp(f32(20), f32(50), t))
+		color := Color{brightness, brightness, brightness, 255}
+		color.g = u8(min(int(color.g), int(particle.brightness - 5)))
+		return color
+	case .OIL:
+		// Oil reads better with subtle hue drift than with alpha noise alone;
+		// this keeps it dark while breaking up large flat patches.
+		darkness := rand.choice([]u8{40, 50, 60, 70, 80})
+		color := Color{darkness + 25, darkness + 10, darkness / 2, 255}
+		color.a = 235 + u8(rand.int31_max(20))
+		if rand.float32() < 0.001 {
+			color = color_alpha_blend(WHITE, color, 220)
+		}
+		return color
+	case .CORRUPTION:
+		base := i32(particle.brightness)
+		noise := i32(rand.int31_max(100))
+		rv := clamp(base + noise, 50, 255)
+		gv := clamp(i32(f32(base) * 0.6) + noise / 2, 20, 200)
+		bv := clamp(base + i32(rand.int31_max(80)), 30, 255)
+		if rand.float32() < 0.5 {
+			rv = clamp(rv + random_i32(-150, 150), 0, 255)
+			gv = clamp(gv + random_i32(-150, 150), 0, 255)
+			bv = clamp(bv + random_i32(-150, 150), 0, 255)
+		}
+		return Color {
+			u8(rv),
+			u8(gv),
+			u8(bv),
+			u8(math.lerp(f32(100), f32(255), f32(particle.lifetime) / 255)),
+		}
+	case .SEED:
+		return color_alpha_blend(BLACK, BROWN, particle.brightness)
+	case .VINE:
+		base := int(particle.brightness)
+		color := Color {
+			u8(clamp(base / 4, 10, 80)),
+			u8(clamp(base, 50, 200)),
+			u8(clamp(base / 3, 10, 80)),
+			255,
+		}
+		if particle.lifetime < 50 {
+			color.a = u8(math.lerp(f32(180), f32(255), f32(particle.lifetime) / 50))
+		}
+		return color
+	case .NONE:
+		return BLACK
+	}
+	return BLACK
+}
+
+wgpu_init :: proc() {
+	r := &state.wgpu
+	r.instance = wgpu.CreateInstance(nil)
+	if r.instance == nil {
+		fmt.panicf("WGPU is not supported")
+	}
+	r.surface = os_get_surface(r.instance)
+	wgpu.InstanceRequestAdapter(
+		r.instance,
+		&{compatibleSurface = r.surface},
+		{callback = wgpu_on_adapter},
+	)
+}
+
+wgpu_on_adapter :: proc "c" (
+	status: wgpu.RequestAdapterStatus,
+	adapter: wgpu.Adapter,
+	message: string,
+	userdata1, userdata2: rawptr,
+) {
+	context = state.wgpu.ctx
+	if status != .Success || adapter == nil {
+		fmt.panicf("request adapter failure: [%v] %v", status, message)
+	}
+	state.wgpu.adapter = adapter
+	wgpu.AdapterRequestDevice(adapter, nil, {callback = wgpu_on_device})
+}
+
+wgpu_on_device :: proc "c" (
+	status: wgpu.RequestDeviceStatus,
+	device: wgpu.Device,
+	message: string,
+	userdata1, userdata2: rawptr,
+) {
+	context = state.wgpu.ctx
+	if status != .Success || device == nil {
+		fmt.panicf("request device failure: [%v] %v", status, message)
+	}
+	state.wgpu.device = device
+	wgpu_after_device_ready()
+	os_run()
+}
+
+wgpu_after_device_ready :: proc() {
+	r := &state.wgpu
+	r.queue = wgpu.DeviceGetQueue(r.device)
+	r.config = wgpu.SurfaceConfiguration {
+		device      = r.device,
+		usage       = {.RenderAttachment},
+		format      = .BGRA8Unorm,
+		width       = WINDOW_WIDTH,
+		height      = WINDOW_HEIGHT,
+		presentMode = .Fifo,
+		alphaMode   = .Opaque,
+	}
+	resize()
+	wgpu_init_particle_pipeline()
+	wgpu_init_ui_pipeline()
+}
+
+wgpu_init_particle_pipeline :: proc() {
+	r := &state.wgpu
+	shader := `
+@group(0) @binding(0) var tex_sampler: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+
+struct VSOut {
+	@builtin(position) pos: vec4<f32>,
+	@location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VSOut {
+	var pos = array<vec2<f32>, 3>(
+		vec2<f32>(-1.0, -1.0),
+		vec2<f32>(3.0, -1.0),
+		vec2<f32>(-1.0, 3.0)
+	);
+	var uv = array<vec2<f32>, 3>(
+		vec2<f32>(0.0, 1.0),
+		vec2<f32>(2.0, 1.0),
+		vec2<f32>(0.0, -1.0)
+	);
+	var out: VSOut;
+	out.pos = vec4<f32>(pos[idx], 0.0, 1.0);
+	out.uv = uv[idx];
+	return out;
+}
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+	return textureSample(tex, tex_sampler, in.uv);
+}`
+
+	r.particle_module = wgpu.DeviceCreateShaderModule(
+		r.device,
+		&{nextInChain = &wgpu.ShaderSourceWGSL{sType = .ShaderSourceWGSL, code = shader}},
+	)
+	r.particle_sampler = wgpu.DeviceCreateSampler(
+		r.device,
+		&{
+			addressModeU = .ClampToEdge,
+			addressModeV = .ClampToEdge,
+			addressModeW = .ClampToEdge,
+			magFilter = .Nearest,
+			minFilter = .Nearest,
+			mipmapFilter = .Nearest,
+			maxAnisotropy = 1,
+		},
+	)
+	r.particle_texture = wgpu.DeviceCreateTexture(
+		r.device,
+		&{
+			usage = {.TextureBinding, .CopyDst},
+			dimension = ._2D,
+			size = {PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT, 1},
+			format = .RGBA8Unorm,
+			mipLevelCount = 1,
+			sampleCount = 1,
+		},
+	)
+	r.particle_texture_view = wgpu.TextureCreateView(r.particle_texture, nil)
+	r.particle_bind_group_layout = wgpu.DeviceCreateBindGroupLayout(
+		r.device,
+		&{
+			entryCount = 2,
+			entries = raw_data(
+				[]wgpu.BindGroupLayoutEntry {
+					{binding = 0, visibility = {.Fragment}, sampler = {type = .Filtering}},
+					{
+						binding = 1,
+						visibility = {.Fragment},
+						texture = {
+							sampleType = .Float,
+							viewDimension = ._2D,
+							multisampled = false,
+						},
+					},
+				},
+			),
+		},
+	)
+	r.particle_bind_group = wgpu.DeviceCreateBindGroup(
+		r.device,
+		&{
+			layout = r.particle_bind_group_layout,
+			entryCount = 2,
+			entries = raw_data(
+				[]wgpu.BindGroupEntry {
+					{binding = 0, sampler = r.particle_sampler},
+					{binding = 1, textureView = r.particle_texture_view},
+				},
+			),
+		},
+	)
+	r.particle_pipeline_layout = wgpu.DeviceCreatePipelineLayout(
+		r.device,
+		&{bindGroupLayoutCount = 1, bindGroupLayouts = &r.particle_bind_group_layout},
+	)
+	r.particle_pipeline = wgpu.DeviceCreateRenderPipeline(
+		r.device,
+		&{
+			layout = r.particle_pipeline_layout,
+			vertex = {module = r.particle_module, entryPoint = "vs_main"},
+			fragment = &{
+				module = r.particle_module,
+				entryPoint = "fs_main",
+				targetCount = 1,
+				targets = &wgpu.ColorTargetState {
+					format = .BGRA8Unorm,
+					writeMask = wgpu.ColorWriteMaskFlags_All,
+				},
+			},
+			primitive = {topology = .TriangleList},
+			multisample = {count = 1, mask = 0xFFFFFFFF},
+		},
+	)
+}
+
+wgpu_init_ui_pipeline :: proc() {
+	r := &state.wgpu
+	shader := `
+@group(0) @binding(0) var tex_sampler: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var<uniform> transform: mat4x4<f32>;
+
+struct VSOut {
+	@builtin(position) pos: vec4<f32>,
+	@location(0) uv: vec2<f32>,
+	@location(1) color: vec4<f32>,
+}
+
+fn unpack_rgba(c: u32) -> vec4<f32> {
+	return vec4<f32>(
+		f32(c & 0xffu) / 255.0,
+		f32((c >> 8u) & 0xffu) / 255.0,
+		f32((c >> 16u) & 0xffu) / 255.0,
+		f32((c >> 24u) & 0xffu) / 255.0
+	);
+}
+
+@vertex
+fn vs_main(@location(0) in_pos: vec2<f32>, @location(1) in_uv: vec2<f32>, @location(2) in_color: u32) -> VSOut {
+	var out: VSOut;
+	out.pos = transform * vec4<f32>(in_pos, 0.0, 1.0);
+	out.uv = in_uv;
+	out.color = unpack_rgba(in_color);
+	return out;
+}
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+	// Microui atlas is R8; treat sampled red channel as glyph/shape coverage.
+	let coverage = textureSample(tex, tex_sampler, in.uv).r;
+	return vec4<f32>(in.color.rgb, in.color.a * coverage);
+}`
+
+	r.ui_const_buffer = wgpu.DeviceCreateBuffer(
+		r.device,
+		&{usage = {.Uniform, .CopyDst}, size = size_of(matrix[4, 4]f32)},
+	)
+	r.ui_atlas_texture = wgpu.DeviceCreateTexture(
+		r.device,
+		&{
+			usage = {.TextureBinding, .CopyDst},
+			dimension = ._2D,
+			size = {mu.DEFAULT_ATLAS_WIDTH, mu.DEFAULT_ATLAS_HEIGHT, 1},
+			format = .R8Unorm,
+			mipLevelCount = 1,
+			sampleCount = 1,
+		},
+	)
+	r.ui_atlas_texture_view = wgpu.TextureCreateView(r.ui_atlas_texture, nil)
+	r.ui_sampler = wgpu.DeviceCreateSampler(
+		r.device,
+		&{
+			addressModeU = .ClampToEdge,
+			addressModeV = .ClampToEdge,
+			addressModeW = .ClampToEdge,
+			magFilter = .Nearest,
+			minFilter = .Nearest,
+			mipmapFilter = .Nearest,
+			maxAnisotropy = 1,
+		},
+	)
+	r.ui_vertex_buffer = wgpu.DeviceCreateBuffer(
+		r.device,
+		&{usage = {.Vertex, .CopyDst}, size = size_of(r.ui_vert_buf)},
+	)
+	r.ui_texcoord_buffer = wgpu.DeviceCreateBuffer(
+		r.device,
+		&{usage = {.Vertex, .CopyDst}, size = size_of(r.ui_tex_buf)},
+	)
+	r.ui_color_buffer = wgpu.DeviceCreateBuffer(
+		r.device,
+		&{usage = {.Vertex, .CopyDst}, size = size_of(r.ui_color_buf)},
+	)
+	r.ui_index_buffer = wgpu.DeviceCreateBuffer(
+		r.device,
+		&{usage = {.Index, .CopyDst}, size = size_of(r.ui_index_buf)},
+	)
+	r.ui_bind_group_layout = wgpu.DeviceCreateBindGroupLayout(
+		r.device,
+		&{
+			entryCount = 3,
+			entries = raw_data(
+				[]wgpu.BindGroupLayoutEntry {
+					{binding = 0, visibility = {.Fragment}, sampler = {type = .Filtering}},
+					{
+						binding = 1,
+						visibility = {.Fragment},
+						texture = {
+							sampleType = .Float,
+							viewDimension = ._2D,
+							multisampled = false,
+						},
+					},
+					{
+						binding = 2,
+						visibility = {.Vertex},
+						buffer = {type = .Uniform, minBindingSize = size_of(matrix[4, 4]f32)},
+					},
+				},
+			),
+		},
+	)
+	r.ui_bind_group = wgpu.DeviceCreateBindGroup(
+		r.device,
+		&{
+			layout = r.ui_bind_group_layout,
+			entryCount = 3,
+			entries = raw_data(
+				[]wgpu.BindGroupEntry {
+					{binding = 0, sampler = r.ui_sampler},
+					{binding = 1, textureView = r.ui_atlas_texture_view},
+					{binding = 2, buffer = r.ui_const_buffer, size = size_of(matrix[4, 4]f32)},
+				},
+			),
+		},
+	)
+	r.ui_module = wgpu.DeviceCreateShaderModule(
+		r.device,
+		&{nextInChain = &wgpu.ShaderSourceWGSL{sType = .ShaderSourceWGSL, code = shader}},
+	)
+	r.ui_pipeline_layout = wgpu.DeviceCreatePipelineLayout(
+		r.device,
+		&{bindGroupLayoutCount = 1, bindGroupLayouts = &r.ui_bind_group_layout},
+	)
+	r.ui_pipeline = wgpu.DeviceCreateRenderPipeline(
+		r.device,
+		&{
+			layout = r.ui_pipeline_layout,
+			vertex = {
+				module = r.ui_module,
+				entryPoint = "vs_main",
+				bufferCount = 3,
+				buffers = raw_data(
+					[]wgpu.VertexBufferLayout {
+						{
+							stepMode = .Vertex,
+							arrayStride = 8,
+							attributeCount = 1,
+							attributes = &wgpu.VertexAttribute {
+								format = .Float32x2,
+								shaderLocation = 0,
+							},
+						},
+						{
+							stepMode = .Vertex,
+							arrayStride = 8,
+							attributeCount = 1,
+							attributes = &wgpu.VertexAttribute {
+								format = .Float32x2,
+								shaderLocation = 1,
+							},
+						},
+						{
+							stepMode = .Vertex,
+							arrayStride = 4,
+							attributeCount = 1,
+							attributes = &wgpu.VertexAttribute {
+								format = .Uint32,
+								shaderLocation = 2,
+							},
+						},
+					},
+				),
+			},
+			fragment = &{
+				module = r.ui_module,
+				entryPoint = "fs_main",
+				targetCount = 1,
+				targets = &wgpu.ColorTargetState {
+					format = .BGRA8Unorm,
+					blend = &{
+						alpha = {
+							srcFactor = .SrcAlpha,
+							dstFactor = .OneMinusSrcAlpha,
+							operation = .Add,
+						},
+						color = {
+							srcFactor = .SrcAlpha,
+							dstFactor = .OneMinusSrcAlpha,
+							operation = .Add,
+						},
+					},
+					writeMask = wgpu.ColorWriteMaskFlags_All,
+				},
+			},
+			primitive = {topology = .TriangleList, cullMode = .None},
+			multisample = {count = 1, mask = 0xFFFFFFFF},
+		},
+	)
+	wgpu.QueueWriteTexture(
+		r.queue,
+		&{texture = r.ui_atlas_texture},
+		&mu.default_atlas_alpha,
+		mu.DEFAULT_ATLAS_WIDTH * mu.DEFAULT_ATLAS_HEIGHT,
+		&{bytesPerRow = mu.DEFAULT_ATLAS_WIDTH, rowsPerImage = mu.DEFAULT_ATLAS_HEIGHT},
+		&{mu.DEFAULT_ATLAS_WIDTH, mu.DEFAULT_ATLAS_HEIGHT, 1},
+	)
+	wgpu_write_ui_consts()
+}
+
+wgpu_write_ui_consts :: proc() {
+	r := &state.wgpu
+	// Microui layout/input are in window coordinates, so projection must match that space.
+	width, height := os_get_window_size()
+	transform := linalg.matrix_ortho3d(0, f32(width), f32(height), 0, -1, 1)
+	wgpu.QueueWriteBuffer(r.queue, r.ui_const_buffer, 0, &transform, size_of(transform))
+}
+
+wgpu_begin_frame :: proc() {
+	r := &state.wgpu
+	r.ui_buf_idx = 0
+	r.ui_prev_buf_idx = 0
+
+	r.curr_texture = wgpu.SurfaceGetCurrentTexture(r.surface)
+	switch r.curr_texture.status {
+	case .SuccessOptimal, .SuccessSuboptimal:
+	case .Timeout, .Outdated, .Lost:
+		if r.curr_texture.texture != nil {
+			wgpu.TextureRelease(r.curr_texture.texture)
+		}
+		resize()
+		return
+	case .OutOfMemory, .DeviceLost, .Error:
+		fmt.panicf("get_current_texture status=%v", r.curr_texture.status)
+	}
+
+	r.curr_view = wgpu.TextureCreateView(r.curr_texture.texture, nil)
+	r.curr_encoder = wgpu.DeviceCreateCommandEncoder(r.device, nil)
+	r.curr_pass = wgpu.CommandEncoderBeginRenderPass(
+		r.curr_encoder,
+		&{
+			colorAttachmentCount = 1,
+			colorAttachments = raw_data(
+				[]wgpu.RenderPassColorAttachment {
+					{
+						view = r.curr_view,
+						loadOp = .Clear,
+						storeOp = .Store,
+						clearValue = {0, 0, 0, 1},
+						depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
+					},
+				},
+			),
+		},
+	)
+}
+
+wgpu_draw_particles_to_pass :: proc() {
+	r := &state.wgpu
+	if r.curr_pass == nil {
+		return
+	}
+	wgpu.RenderPassEncoderSetPipeline(r.curr_pass, r.particle_pipeline)
+	wgpu.RenderPassEncoderSetBindGroup(r.curr_pass, 0, r.particle_bind_group)
+	wgpu.RenderPassEncoderDraw(r.curr_pass, 3, 1, 0, 0)
+
+	wgpu.RenderPassEncoderSetPipeline(r.curr_pass, r.ui_pipeline)
+	wgpu.RenderPassEncoderSetBindGroup(r.curr_pass, 0, r.ui_bind_group)
+	wgpu.RenderPassEncoderSetVertexBuffer(
+		r.curr_pass,
+		0,
+		r.ui_vertex_buffer,
+		0,
+		size_of(r.ui_vert_buf),
+	)
+	wgpu.RenderPassEncoderSetVertexBuffer(
+		r.curr_pass,
+		1,
+		r.ui_texcoord_buffer,
+		0,
+		size_of(r.ui_tex_buf),
+	)
+	wgpu.RenderPassEncoderSetVertexBuffer(
+		r.curr_pass,
+		2,
+		r.ui_color_buffer,
+		0,
+		size_of(r.ui_color_buf),
+	)
+	wgpu.RenderPassEncoderSetIndexBuffer(
+		r.curr_pass,
+		r.ui_index_buffer,
+		.Uint32,
+		0,
+		size_of(r.ui_index_buf),
+	)
+}
+
+ui_set_clip_rect :: proc(rect: mu.Rect) {
+	r := &state.wgpu
+	ui_flush()
+	window_w, window_h := os_get_window_size()
+	if window_w == 0 || window_h == 0 {
+		return
+	}
+	scale_x := f32(r.config.width) / f32(window_w)
+	scale_y := f32(r.config.height) / f32(window_h)
+
+	// Scissor is in framebuffer pixels, so clip rect needs DPI scaling.
+	x := clamp(i32(f32(rect.x) * scale_x), 0, i32(r.config.width))
+	y := clamp(i32(f32(rect.y) * scale_y), 0, i32(r.config.height))
+	w := clamp(i32(f32(rect.w) * scale_x), 0, i32(r.config.width) - x)
+	h := clamp(i32(f32(rect.h) * scale_y), 0, i32(r.config.height) - y)
+	wgpu.RenderPassEncoderSetScissorRect(r.curr_pass, u32(x), u32(y), u32(w), u32(h))
+}
+
+ui_draw_rect :: proc(rect: mu.Rect, color: mu.Color) {
+	ui_push_quad(rect, mu.default_atlas[mu.DEFAULT_ATLAS_WHITE], color)
+}
+
+ui_draw_text :: proc(text: string, pos: mu.Vec2, color: mu.Color) {
+	dst := mu.Rect{pos.x, pos.y, 0, 0}
+	for ch in text {
+		if ch & 0xc0 != 0x80 {
+			rune_idx := min(int(ch), 127)
+			src := mu.default_atlas[mu.DEFAULT_ATLAS_FONT + rune_idx]
+			dst.w = src.w
+			dst.h = src.h
+			ui_push_quad(dst, src, color)
+			dst.x += dst.w
+		}
+	}
+}
+
+ui_draw_icon :: proc(id: mu.Icon, rect: mu.Rect, color: mu.Color) {
+	src := mu.default_atlas[id]
+	x := rect.x + (rect.w - src.w) / 2
+	y := rect.y + (rect.h - src.h) / 2
+	ui_push_quad({x, y, src.w, src.h}, src, color)
+}
+
+ui_push_quad :: proc(dst, src: mu.Rect, color: mu.Color) #no_bounds_check {
+	r := &state.wgpu
+	if r.ui_buf_idx >= WGPU_UI_BUFFER_SIZE {
+		return
+	}
+	textvert_idx := r.ui_buf_idx * 8
+	color_idx := r.ui_buf_idx * 16
+	element_idx := u32(r.ui_buf_idx * 4)
+	index_idx := r.ui_buf_idx * 6
+	r.ui_buf_idx += 1
+
+	x := f32(src.x) / mu.DEFAULT_ATLAS_WIDTH
+	y := f32(src.y) / mu.DEFAULT_ATLAS_HEIGHT
+	w := f32(src.w) / mu.DEFAULT_ATLAS_WIDTH
+	h := f32(src.h) / mu.DEFAULT_ATLAS_HEIGHT
+	copy(r.ui_tex_buf[textvert_idx:], []f32{x, y, x + w, y, x, y + h, x + w, y + h})
+
+	dx, dy, dw, dh := f32(dst.x), f32(dst.y), f32(dst.w), f32(dst.h)
+	copy(r.ui_vert_buf[textvert_idx:], []f32{dx, dy, dx + dw, dy, dx, dy + dh, dx + dw, dy + dh})
+
+	packed := u32(color.r) | (u32(color.g) << 8) | (u32(color.b) << 16) | (u32(color.a) << 24)
+	for i in 0 ..< 4 {
+		base := int(color_idx) + i * 4
+		r.ui_color_buf[base + 0] = u8(packed & 0xFF)
+		r.ui_color_buf[base + 1] = u8((packed >> 8) & 0xFF)
+		r.ui_color_buf[base + 2] = u8((packed >> 16) & 0xFF)
+		r.ui_color_buf[base + 3] = u8((packed >> 24) & 0xFF)
+	}
+
+	copy(
+		r.ui_index_buf[index_idx:],
+		[]u32 {
+			element_idx + 0,
+			element_idx + 1,
+			element_idx + 2,
+			element_idx + 2,
+			element_idx + 3,
+			element_idx + 1,
+		},
+	)
+}
+
+ui_flush :: proc() {
+	r := &state.wgpu
+	if r.ui_buf_idx == 0 || r.ui_buf_idx == r.ui_prev_buf_idx {
+		return
+	}
+	delta := uint(r.ui_buf_idx - r.ui_prev_buf_idx)
+	wgpu.RenderPassEncoderDrawIndexed(r.curr_pass, u32(delta * 6), 1, r.ui_prev_buf_idx * 6, 0, 0)
+	r.ui_prev_buf_idx = r.ui_buf_idx
+}
+
+wgpu_present_frame :: proc() {
+	r := &state.wgpu
+	if r.curr_pass == nil {
+		return
+	}
+	if r.ui_buf_idx > 0 {
+		wgpu.QueueWriteBuffer(
+			r.queue,
+			r.ui_vertex_buffer,
+			0,
+			&r.ui_vert_buf,
+			uint(r.ui_buf_idx * 8 * size_of(f32)),
+		)
+		wgpu.QueueWriteBuffer(
+			r.queue,
+			r.ui_texcoord_buffer,
+			0,
+			&r.ui_tex_buf,
+			uint(r.ui_buf_idx * 8 * size_of(f32)),
+		)
+		wgpu.QueueWriteBuffer(
+			r.queue,
+			r.ui_color_buffer,
+			0,
+			&r.ui_color_buf,
+			uint(r.ui_buf_idx * 16),
+		)
+		wgpu.QueueWriteBuffer(
+			r.queue,
+			r.ui_index_buffer,
+			0,
+			&r.ui_index_buf,
+			uint(r.ui_buf_idx * 6 * size_of(u32)),
+		)
+		ui_flush()
+	}
+
+	wgpu.RenderPassEncoderEnd(r.curr_pass)
+	wgpu.RenderPassEncoderRelease(r.curr_pass)
+	r.curr_pass = nil
+
+	command_buffer := wgpu.CommandEncoderFinish(r.curr_encoder, nil)
+	wgpu.QueueSubmit(r.queue, {command_buffer})
+	wgpu.CommandBufferRelease(command_buffer)
+	wgpu.CommandEncoderRelease(r.curr_encoder)
+	r.curr_encoder = nil
+
+	wgpu.SurfacePresent(r.surface)
+	wgpu.TextureViewRelease(r.curr_view)
+	wgpu.TextureRelease(r.curr_texture.texture)
+}
+
+wgpu_finish :: proc() {
+	r := &state.wgpu
+	if r.ui_pipeline != nil {
+		wgpu.RenderPipelineRelease(r.ui_pipeline)
+	}
+	if r.ui_pipeline_layout != nil {
+		wgpu.PipelineLayoutRelease(r.ui_pipeline_layout)
+	}
+	if r.ui_module != nil {
+		wgpu.ShaderModuleRelease(r.ui_module)
+	}
+	if r.ui_bind_group != nil {
+		wgpu.BindGroupRelease(r.ui_bind_group)
+	}
+	if r.ui_bind_group_layout != nil {
+		wgpu.BindGroupLayoutRelease(r.ui_bind_group_layout)
+	}
+	if r.ui_sampler != nil {
+		wgpu.SamplerRelease(r.ui_sampler)
+	}
+	if r.ui_const_buffer != nil {
+		wgpu.BufferRelease(r.ui_const_buffer)
+	}
+	if r.ui_vertex_buffer != nil {wgpu.BufferRelease(r.ui_vertex_buffer)}
+	if r.ui_texcoord_buffer != nil {wgpu.BufferRelease(r.ui_texcoord_buffer)}
+	if r.ui_color_buffer != nil {wgpu.BufferRelease(r.ui_color_buffer)}
+	if r.ui_index_buffer != nil {wgpu.BufferRelease(r.ui_index_buffer)}
+	if r.ui_atlas_texture_view != nil {wgpu.TextureViewRelease(r.ui_atlas_texture_view)}
+	if r.ui_atlas_texture != nil {wgpu.TextureRelease(r.ui_atlas_texture)}
+
+	if r.particle_pipeline != nil {wgpu.RenderPipelineRelease(r.particle_pipeline)}
+	if r.particle_pipeline_layout != nil {wgpu.PipelineLayoutRelease(r.particle_pipeline_layout)}
+	if r.particle_module != nil {wgpu.ShaderModuleRelease(r.particle_module)}
+	if r.particle_bind_group != nil {wgpu.BindGroupRelease(r.particle_bind_group)}
+	if r.particle_bind_group_layout !=
+	   nil {wgpu.BindGroupLayoutRelease(r.particle_bind_group_layout)}
+	if r.particle_sampler != nil {wgpu.SamplerRelease(r.particle_sampler)}
+	if r.particle_texture_view != nil {wgpu.TextureViewRelease(r.particle_texture_view)}
+	if r.particle_texture != nil {wgpu.TextureRelease(r.particle_texture)}
+
+	if r.queue != nil {wgpu.QueueRelease(r.queue)}
+	if r.device != nil {wgpu.DeviceRelease(r.device)}
+	if r.adapter != nil {wgpu.AdapterRelease(r.adapter)}
+	if r.surface != nil {wgpu.SurfaceRelease(r.surface)}
+	if r.instance != nil {wgpu.InstanceRelease(r.instance)}
 }
